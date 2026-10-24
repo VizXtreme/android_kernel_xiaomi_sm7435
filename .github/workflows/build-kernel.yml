@@ -1,0 +1,129 @@
+name: Build Kernel Image
+
+on:
+  push:
+    branches:
+      - 16.2
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
+  pull_request:
+    branches:
+      - 16.2
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
+  workflow_dispatch:
+    inputs:
+      build_target:
+        description: 'Target Device / Config'
+        required: true
+        default: 'garnet'
+        type: choice
+        options:
+          - garnet
+          - parrot
+          - generic_gki
+
+jobs:
+  build:
+    name: Build Kernel Image
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+
+      - name: Setup Build Environment & Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc \
+            bison \
+            ca-certificates \
+            curl \
+            flex \
+            gcc \
+            git \
+            kmod \
+            libelf-dev \
+            libssl-dev \
+            make \
+            python3 \
+            tar \
+            xz-utils
+
+      - name: Download Clang Toolchain
+        run: |
+          mkdir -p clang
+          echo "Downloading AOSP Clang (clang-r416183b)..."
+          curl -sSL "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r416183b.tar.gz" | tar -xzC clang
+          echo "Clang version:"
+          ./clang/bin/clang --version
+
+      - name: Generate Kernel Configuration
+        run: |
+          mkdir -p out
+          ARCH=arm64
+          TARGET="${{ github.event.inputs.build_target || 'garnet' }}"
+          echo "Configuring for target: ${TARGET}"
+
+          if [ "${TARGET}" = "garnet" ]; then
+            echo "Applying: gki_defconfig + parrot_GKI.config + garnet_GKI.config"
+            ./scripts/kconfig/merge_config.sh -m -O out \
+              arch/arm64/configs/gki_defconfig \
+              arch/arm64/configs/vendor/parrot_GKI.config \
+              arch/arm64/configs/vendor/garnet_GKI.config
+          elif [ "${TARGET}" = "parrot" ]; then
+            echo "Applying: gki_defconfig + parrot_GKI.config"
+            ./scripts/kconfig/merge_config.sh -m -O out \
+              arch/arm64/configs/gki_defconfig \
+              arch/arm64/configs/vendor/parrot_GKI.config
+          else
+            echo "Applying: generic gki_defconfig"
+            ./scripts/kconfig/merge_config.sh -m -O out \
+              arch/arm64/configs/gki_defconfig
+          fi
+
+          make O=out ARCH=arm64 \
+            CC=$(pwd)/clang/bin/clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            olddefconfig
+
+      - name: Compile Kernel Image
+        run: |
+          PATH=$(pwd)/clang/bin:$PATH
+          make -j$(nproc --all) O=out \
+            ARCH=arm64 \
+            CC=$(pwd)/clang/bin/clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            Image
+
+      - name: Package & Prepare Artifacts
+        run: |
+          mkdir -p dist
+          if [ -f out/arch/arm64/boot/Image ]; then
+            cp out/arch/arm64/boot/Image dist/Image
+            gzip -9 -c out/arch/arm64/boot/Image > dist/Image.gz
+            cp out/.config dist/config.txt
+            echo "Build successful! Artifacts prepared."
+          else
+            echo "Error: Image not found!"
+            exit 1
+          fi
+
+      - name: Upload Kernel Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ github.event.inputs.build_target || 'garnet' }}-${{ github.sha }}
+          path: |
+            dist/Image
+            dist/Image.gz
+            dist/config.txt
