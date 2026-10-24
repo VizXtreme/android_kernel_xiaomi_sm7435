@@ -51,6 +51,7 @@ jobs:
             kmod \
             libelf-dev \
             libssl-dev \
+            lld \
             make \
             python3 \
             tar \
@@ -58,11 +59,12 @@ jobs:
 
       - name: Download Clang Toolchain
         run: |
-          mkdir -p clang
+          mkdir -p "${GITHUB_WORKSPACE}/clang"
           echo "Downloading AOSP Clang (clang-r416183b)..."
-          curl -sSL "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r416183b.tar.gz" | tar -xzC clang
+          curl -sSL "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r416183b.tar.gz" | tar -xzC "${GITHUB_WORKSPACE}/clang"
+          echo "${GITHUB_WORKSPACE}/clang/bin" >> $GITHUB_PATH
           echo "Clang version:"
-          ./clang/bin/clang --version
+          "${GITHUB_WORKSPACE}/clang/bin/clang" --version
 
       - name: Generate Kernel Configuration
         run: |
@@ -89,7 +91,7 @@ jobs:
           fi
 
           make O=out ARCH=arm64 \
-            CC=$(pwd)/clang/bin/clang \
+            CC=clang \
             CROSS_COMPILE=aarch64-linux-gnu- \
             LLVM=1 \
             LLVM_IAS=1 \
@@ -97,10 +99,9 @@ jobs:
 
       - name: Compile Kernel Image
         run: |
-          PATH=$(pwd)/clang/bin:$PATH
           make -j$(nproc --all) O=out \
             ARCH=arm64 \
-            CC=$(pwd)/clang/bin/clang \
+            CC=clang \
             CROSS_COMPILE=aarch64-linux-gnu- \
             LLVM=1 \
             LLVM_IAS=1 \
